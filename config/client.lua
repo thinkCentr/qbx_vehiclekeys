@@ -1,28 +1,3 @@
----@alias Difficulty 'easy' | 'medium' | 'hard' | {areaSize: number, speedMultiplier: number}
-
----Arguments of https://coxdocs.dev/ox_lib/Modules/Interface/Client/skillcheck
----@class SkillCheckConfig
----@field difficulty Difficulty[]
----@field inputs? string[]
-
----@type SkillCheckConfig
-local easyLockpickSkillCheck = {
-    difficulty = { 'easy', 'easy', { areaSize = 60, speedMultiplier = 1 }, 'medium' },
-    inputs = { '1', '2', '3' }
-}
-
----@type SkillCheckConfig
-local normalLockpickSkillCheck = {
-    difficulty = { 'easy', 'easy', { areaSize = 60, speedMultiplier = 1 }, 'medium' },
-    inputs = { '1', '2', '3', '4' }
-}
-
----@type SkillCheckConfig
-local hardLockpickSkillCheck = {
-    difficulty = { 'easy', 'easy', { areaSize = 60, speedMultiplier = 2 }, 'medium' },
-    inputs = { '1', '2', '3', '4' }
-}
-
 return {
     vehicleMaximumLockingDistance = 5.0, -- Maximum distance for vehicle locking
     getKeysWhenEngineIsRunning = true, -- when enabled, gives keys to a player who doesn't have them if they enter the driver seat when the engine is running
@@ -92,65 +67,61 @@ return {
         }
     },
 
-    ---@class SkillCheckConfigEntry
-    ---@field default SkillCheckConfig
-    ---@field class table<VehicleClass, SkillCheckConfig | {}>
-    ---@field model table<number, SkillCheckConfig>
-
-    ---@class SkillCheckEntities
-    ---@field lockpick SkillCheckConfigEntry
-    ---@field advancedLockpick SkillCheckConfigEntry
-    ---@field hotwire SkillCheckConfigEntry
-    ---@field advancedHotwire SkillCheckConfigEntry
-
-    ---@type SkillCheckEntities
-    skillCheck = {
-        lockpick = {
-            default = normalLockpickSkillCheck,
-            class = {
-                [VehicleClass.PLANES] = hardLockpickSkillCheck,
-                [VehicleClass.HELICOPTERS] = hardLockpickSkillCheck,
-                [VehicleClass.EMERGENCY] = hardLockpickSkillCheck,
-                [VehicleClass.MILITARY] = {}, -- cannot be lockpicked
-                [VehicleClass.TRAINS] = {}, -- cannot be lockpicked
-                [VehicleClass.OPEN_WHEEL] = easyLockpickSkillCheck,
+    -- Lation UI minigames: https://lationscripts.com/docs/ui/minigames
+    -- Empty class overrides disable lockpicking for that vehicle class.
+    minigames = {
+        door = {
+            lockpick = {
+                default = { 'easy', 'medium' },
+                class = {
+                    [VehicleClass.PLANES] = { 'medium', 'hard' },
+                    [VehicleClass.HELICOPTERS] = { 'medium', 'hard' },
+                    [VehicleClass.EMERGENCY] = { 'medium', 'hard' },
+                    [VehicleClass.MILITARY] = {},
+                    [VehicleClass.TRAINS] = {},
+                    [VehicleClass.OPEN_WHEEL] = { 'easy' },
+                },
+                model = {},
             },
-            model = {}
+            advancedLockpick = {
+                default = { 'easy' },
+                class = {
+                    [VehicleClass.PLANES] = { 'medium', 'hard' },
+                    [VehicleClass.HELICOPTERS] = { 'medium', 'hard' },
+                    [VehicleClass.EMERGENCY] = { 'medium', 'hard' },
+                    [VehicleClass.MILITARY] = {},
+                    [VehicleClass.TRAINS] = {},
+                },
+                model = {},
+            },
         },
-        advancedLockpick = {
-            default = easyLockpickSkillCheck,
-            class = {
-                [VehicleClass.PLANES] = hardLockpickSkillCheck,
-                [VehicleClass.HELICOPTERS] = hardLockpickSkillCheck,
-                [VehicleClass.EMERGENCY] = hardLockpickSkillCheck,
-                [VehicleClass.MILITARY] = {}, -- cannot be lockpicked
-                [VehicleClass.TRAINS] = {}, -- cannot be lockpicked
+        ignition = {
+            -- Mechanical lockpick stage. Always required when bypassing Contact.
+            pattern = {
+                [1] = { 'easy' },
+                [2] = { 'medium' },
+                [3] = { 'medium', 'hard' },
+                [4] = { 'hard', 'hard' },
             },
-            model = {}
+            -- Electronic stage. Levels 2+ require an ECU programmer in inventory.
+            signal = {
+                [2] = {
+                    difficulty = 'easy',
+                    inputs = { 'E' },
+                    options = { speedIncrease = 0.03, windowDecrease = 1 },
+                },
+                [3] = {
+                    difficulty = 'medium',
+                    inputs = { 'E' },
+                    options = { speedIncrease = 0.05, windowDecrease = 2 },
+                },
+                [4] = {
+                    difficulty = 'hard',
+                    inputs = { 'E' },
+                    options = { speedIncrease = 0.07, windowDecrease = 3 },
+                },
+            },
         },
-        hotwire = {
-            default = normalLockpickSkillCheck,
-            class = {
-                [VehicleClass.PLANES] = hardLockpickSkillCheck,
-                [VehicleClass.HELICOPTERS] = hardLockpickSkillCheck,
-                [VehicleClass.EMERGENCY] = hardLockpickSkillCheck,
-                [VehicleClass.MILITARY] = {}, -- cannot be hotwired
-                [VehicleClass.TRAINS] = {}, -- cannot be hotwired
-                [VehicleClass.OPEN_WHEEL] = easyLockpickSkillCheck,
-            },
-            model = {}
-        },
-        advancedHotwire = {
-            default = easyLockpickSkillCheck,
-            class = {
-                [VehicleClass.PLANES] = hardLockpickSkillCheck,
-                [VehicleClass.HELICOPTERS] = hardLockpickSkillCheck,
-                [VehicleClass.EMERGENCY] = hardLockpickSkillCheck,
-                [VehicleClass.MILITARY] = {}, -- cannot be hotwired
-                [VehicleClass.TRAINS] = {}, -- cannot be hotwired
-            },
-            model = {}
-        }
     },
 
     ---@class AnimConfigEntry

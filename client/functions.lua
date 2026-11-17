@@ -110,124 +110,151 @@ local function getIsVehicleInRange(vehicle, maxDistance)
     end
 end
 
----Chance to destroy lockpick
----@param isAdvancedLockedpick any
----@param vehicle number
----Will be executed when the lock opening is successful.
----@param vehicle number The entity number of the vehicle.
-local function lockpickSuccessCallback(vehicle)
-    TriggerServerEvent('hud:server:GainStress', math.random(1, 4))
-    if lib.callback.await('qbx_vehiclekeys:server:lockpickDoor', false, VehToNet(vehicle)) then
-        exports.qbx_core:Notify(locale('notify.vehicle_lockedpick'), 'success')
-    else
-        exports.qbx_core:Notify(locale('notify.failed_lockedpick'), 'error')
+-- Lation minigames return a boolean. Fail closed if the UI is missing or errors.
+local function runPatternLock(title, difficulty)
+    if GetResourceState('lation_ui') ~= 'started' then return false end
+    local ok, result = pcall(function()
+        return exports.lation_ui:patternLock(title, difficulty)
+    end)
+    if not ok then
+        print(('[qbx_vehiclekeys] Lation patternLock error: %s'):format(tostring(result)))
     end
+    return ok and result == true
 end
 
----Operations done after the LockpickDoor quickevent done.
----@param vehicle number The entity number of the vehicle.
----@param isAdvancedLockedpick boolean Determines whether an advanced lockpick was used.
----@param isSuccess boolean? Determines whether the lock has been successfully opened.
-local function lockpickCallback(vehicle, isAdvancedLockedpick, isSuccess)
+local function runSignalBreach(title, profile)
+    if GetResourceState('lation_ui') ~= 'started' or not profile then return false end
+    local ok, result = pcall(function()
+        return exports.lation_ui:signalBreach(
+            title, profile.difficulty, profile.inputs, profile.options
+        )
+    end)
+    if not ok then
+        print(('[qbx_vehiclekeys] Lation signalBreach error: %s'):format(tostring(result)))
+    end
+    return ok and result == true
+end
+
+local function lockpickCallback(vehicle, isSuccess)
     if isSuccess then
-        lockpickSuccessCallback(vehicle)
-    else -- if player fails quickevent
+        TriggerServerEvent('hud:server:GainStress', math.random(1, 4))
+        exports.qbx_core:Notify(locale('notify.vehicle_lockedpick'), 'success')
+    else
         SendPoliceAlertAttempt('carjack', vehicle)
         SetVehicleAlarm(vehicle, false)
         SetVehicleAlarmTimeLeft(vehicle, config.vehicleAlarmDuration)
         TriggerServerEvent('hud:server:GainStress', math.random(1, 4))
         exports.qbx_core:Notify(locale('notify.failed_lockedpick'), 'error')
     end
-
 end
 
-local islockpickingProcessLocked = false -- lock flag
----Lockpicking quickevent.
----@param isAdvancedLockedpick boolean Determines whether an advanced lockpick was used
----@param maxDistance number? The max distance to check.
----@param customChallenge boolean? lockpick challenge
-function LockpickDoor(isAdvancedLockedpick, maxDistance, customChallenge)
+local islockpickingProcessLocked = false
+
+-- Door entry: Lation Pattern Lock. The server validates the selected tool and
+-- reserves a single attempt before the UI starts, then revalidates on completion.
+function LockpickDoor(_isAdvancedLockedpick, maxDistance, _customChallenge)
     maxDistance = maxDistance or 2
     local pedCoords = GetEntityCoords(cache.ped)
-    local vehicle = lib.getClosestVehicle(pedCoords, maxDistance * 2, false) -- The difference between the door and the center of the vehicle
-
+    local vehicle = lib.getClosestVehicle(pedCoords, maxDistance * 2, false)
     if not vehicle then return end
+    if GetVehicleDoorLockStatus(vehicle) < 2 then
+        exports.qbx_core:Notify(locale('notify.vehicle_is_unlocked'), 'error')
+        return
+    end
+    if not IsVehicleSeatFree(vehicle, -1)
+        or not getIsCloseToAnyBone(pedCoords, vehicle, doorBones, maxDistance)
+        or GetVehicleConfig(vehicle).lockpickImmune then return end
 
-    local isDriverSeatFree = IsVehicleSeatFree(vehicle, -1)
+    if islockpickingProcessLocked then return end
+    if GetResourceState('lation_ui') ~= 'started' then
+        exports.qbx_core:Notify('Lation UI est indisponible.', 'error')
+        return
+    end
 
-    if GetVehicleDoorLockStatus(vehicle) < 2 then exports.qbx_core:Notify(locale('notify.vehicle_is_unlocked'), 'error') return end
-
-    --- player may attempt to open the lock if:
-    if not isDriverSeatFree -- no one in the driver's seat
-        or not getIsCloseToAnyBone(pedCoords, vehicle, doorBones, maxDistance) -- the player's ped is close enough to the driver's door
-        or GetVehicleConfig(vehicle).lockpickImmune
-    then return end
-
-    local skillCheckConfig = config.skillCheck[isAdvancedLockedpick and 'advancedLockpick' or 'lockpick']
-
-    skillCheckConfig = skillCheckConfig.model[GetEntityModel(vehicle)]
-        or skillCheckConfig.class[GetVehicleClass(vehicle)]
-        or skillCheckConfig.default
-    if not next(skillCheckConfig) then return end
-
-    if islockpickingProcessLocked then return end -- start of the critical section
-    islockpickingProcessLocked = true -- one call per player at a time
-
+    islockpickingProcessLocked = true
     CreateThread(function()
+        local netId = VehToNet(vehicle)
+        local ok, attempt = pcall(lib.callback.await, 'qbx_vehiclekeys:server:beginDoorLockpick', false, netId)
+        if not ok or type(attempt) ~= 'table' then
+            exports.qbx_core:Notify('Crochetage impossible : crochet manquant ou serrure inaccessible.', 'error')
+            islockpickingProcessLocked = false
+            return
+        end
+
+        local profile = config.minigames.door[attempt.advanced and 'advancedLockpick' or 'lockpick']
+        local difficulty = profile.model[GetEntityModel(vehicle)]
+            or profile.class[GetVehicleClass(vehicle)] or profile.default
+        if not difficulty or #difficulty == 0 then
+            lib.callback.await('qbx_vehiclekeys:server:finishDoorLockpick', false, netId, false)
+            islockpickingProcessLocked = false
+            return
+        end
+
         local anim = config.anims.lockpick.model[GetEntityModel(vehicle)]
             or config.anims.lockpick.class[GetVehicleClass(vehicle)]
             or config.anims.lockpick.default
-        lib.playAnim(cache.ped, anim.dict, anim.clip, 3.0, 3.0, -1, 16, 0, false, false, false) -- lock opening animation
-        local isSuccess = customChallenge or lib.skillCheck(skillCheckConfig.difficulty, skillCheckConfig.inputs)
+        lib.playAnim(cache.ped, anim.dict, anim.clip, 3.0, 3.0, -1, 16, 0, false, false, false)
 
-        if getIsVehicleInRange(vehicle, maxDistance) then -- the action will be aborted if the opened vehicle is too far.
-            lockpickCallback(vehicle, isAdvancedLockedpick, isSuccess)
-        end
+        local passed = runPatternLock('Crochetage de serrure', difficulty)
+        local inRange = getIsVehicleInRange(vehicle, maxDistance) == true
+        local finished, unlocked = pcall(lib.callback.await,
+            'qbx_vehiclekeys:server:finishDoorLockpick', false, netId, passed and inRange)
+        if inRange then lockpickCallback(vehicle, finished and unlocked == true) end
 
         Wait(config.lockpickCooldown)
-        islockpickingProcessLocked = false -- end of the critical section
+        islockpickingProcessLocked = false
     end)
 end
 
----Will be executed when the lock opening is successful.
----@param vehicle number The entity number of the vehicle.
 local isHotwiringProcessLocked = false
 
--- The pick must already be physically inserted in Contact.
--- The server independently validates the tool, security profile, elapsed time and outcome.
-function Hotwire(vehicle, _, customChallenge)
+-- Contact: Pattern Lock for the mechanical stage, then Signal Breach for levels 2+.
+-- Never accept a customChallenge override as proof of a completed minigame.
+function Hotwire(vehicle, _isAdvanced, _customChallenge)
     if cache.seat ~= -1 or isHotwiringProcessLocked then return end
+    if GetResourceState('lation_ui') ~= 'started' then
+        exports.qbx_core:Notify('Lation UI est indisponible.', 'error')
+        return
+    end
     isHotwiringProcessLocked = true
     CreateThread(function()
-        local attempt = lib.callback.await('qbx_vehiclekeys:ignition:beginHotwire', false, VehToNet(vehicle))
-        if not attempt or type(attempt) ~= 'table' then
+        local netId = VehToNet(vehicle)
+        local ok, attempt = pcall(lib.callback.await, 'qbx_vehiclekeys:ignition:beginHotwire', false, netId)
+        if not ok or type(attempt) ~= 'table' then
             exports.qbx_core:Notify('Contact invalide ou équipement ECU requis.', 'error')
             isHotwiringProcessLocked = false
             return
         end
 
         local level = math.min(4, math.max(1, tonumber(attempt.level) or 1))
-        local difficulties = {
-            [1] = { 'easy', 'easy', 'medium' },
-            [2] = { 'easy', 'medium', 'medium' },
-            [3] = { 'medium', 'hard', 'hard' },
-            [4] = { 'hard', 'hard', 'hard', 'hard' },
-        }
-        local start = GetGameTimer()
+        local minigames = config.minigames.ignition
+        local started = GetGameTimer()
         local anim = config.anims.hotwire.model[GetEntityModel(vehicle)]
             or config.anims.hotwire.class[GetVehicleClass(vehicle)]
             or config.anims.hotwire.default
         lib.playAnim(cache.ped, anim.dict, anim.clip, 3.0, 3.0, -1, 16, 0, false, false, false)
-        local passed = customChallenge or lib.skillCheck(difficulties[level], { '1', '2', '3', '4' })
-        Wait(math.max(0, 3100 - (GetGameTimer() - start)))
 
-        local success = lib.callback.await('qbx_vehiclekeys:ignition:finishHotwire', false, VehToNet(vehicle), passed == true)
-        if success then
-            exports.qbx_core:Notify('Contact contourné. Crochet lié au véhicule. Appuie à nouveau pour démarrer.', 'success')
+        local passed = runPatternLock('Crochetage du contact', minigames.pattern[level])
+        if passed and level >= 2 and cache.vehicle == vehicle and cache.seat == -1 then
+            passed = runSignalBreach('Contournement électronique', minigames.signal[level])
+        end
+
+        -- A successful UI animation is not authorization: the server validates
+        -- identity, Contact item, security revision, equipment, and elapsed time.
+        Wait(math.max(0, 3100 - (GetGameTimer() - started)))
+        if cache.vehicle ~= vehicle or cache.seat ~= -1 then passed = false end
+        local finished, success = pcall(lib.callback.await,
+            'qbx_vehiclekeys:ignition:finishHotwire', false, netId, passed == true)
+        if finished and success == true then
+            exports.qbx_core:Notify(
+                'Contact contourné. Crochet lié au véhicule. Appuie à nouveau pour démarrer.',
+                'success'
+            )
         else
             SendPoliceAlertAttempt('carjack', vehicle)
             exports.qbx_core:Notify('Le contournement du Contact a échoué.', 'error')
         end
+
         Wait(config.hotwireCooldown)
         isHotwiringProcessLocked = false
     end)

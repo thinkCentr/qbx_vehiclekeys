@@ -31,6 +31,7 @@ local function hasIgnitionAccess(source, vehicle)
     if not vehicle or driverVehicle(source) ~= vehicle then return false end
     if not exports.qbx_core:GetPlayer(source) then return false end
     if HasJobVehicleKeys(source, vehicle) then return true end
+    if not vehicleIds[vehicle] then EnsureRestoredIgnition(vehicle) end
     return GetResourceState('ox_inventory') == 'started' and inventory:HasIgnitionKey(vehicle) == true
 end
 exports('HasIgnitionAccess', hasIgnitionAccess)
@@ -196,6 +197,7 @@ function GetIgnitionIdentity(vehicle)
 end
 
 exports('GetGarageVehicleId', function(vehicle)
+    if vehicle and not vehicleIds[vehicle] then EnsureRestoredIgnition(vehicle) end
     return vehicleKinds[vehicle] == 'owned' and vehicleIds[vehicle] or nil
 end)
 exports('GetBoundVehicle', function(id)

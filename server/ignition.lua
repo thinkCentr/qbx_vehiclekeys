@@ -44,6 +44,10 @@ end)
 function HasPhysicalKey(source, vehicle)
     if not vehicle or GetResourceState('ox_inventory') ~= 'started' then return false end
     local id = inventory:GetIgnitionVehicleId(vehicle)
+    if not id then
+        EnsureRestoredIgnition(vehicle)
+        id = inventory:GetIgnitionVehicleId(vehicle)
+    end
     if not id then return false end
     for _, item in pairs(inventory:Search(source, 'slots', 'vehicle_key') or {}) do
         if item.metadata and item.metadata.vehicleId == id then return true end
@@ -115,223 +119,12 @@ exports('RegisterGarageVehicle', function(vehicle, id)
 end)
 
 local function normalizePlate(plate)
-    return type(plate) == 'string' and plate:match('^%s*(.-)%s*
-
--- Server-internal entry point. Ambient registration never uses a client-supplied identity.
-function RegisterTemporaryIgnition(vehicle)
-    if not DoesEntityExist(vehicle) or GetEntityType(vehicle) ~= 2 then return end
-    if vehicleIds[vehicle] then
-        return vehicleKinds[vehicle] == 'temporary' and vehicleIds[vehicle] or nil
-    end
-    if Entity(vehicle).state.vehicleid or Entity(vehicle).state.persisted then return end
-    temporarySequence += 1
-    local id = ('temp:%s:%d'):format(bootNonce, temporarySequence)
-    if not inventory:BindVehicleIgnition(vehicle, id, 'temporary', 1) then return end
-    vehicleIds[vehicle], vehicleKinds[vehicle], vehicles[id], revisions[vehicle] = id, 'temporary', vehicle, 1
-    setPublicIdentity(vehicle, id, 'temporary', 1)
-    return id
+    return type(plate) == 'string' and plate:match('^%s*(.-)%s*$'):upper() or nil
 end
 
-function GetIgnitionIdentity(vehicle)
-    return vehicleIds[vehicle], vehicleKinds[vehicle]
-end
-
-exports('GetGarageVehicleId', function(vehicle)
-    return vehicleKinds[vehicle] == 'owned' and vehicleIds[vehicle] or nil
-end)
-exports('GetBoundVehicle', function(id)
-    local vehicle = vehicles[id]
-    return vehicle and DoesEntityExist(vehicle) and vehicle or nil
-end)
-
--- The trusted mechanic export and gated admin test command share this operation.
-local function resetIgnitionSecurity(id)
-    if type(id) ~= 'number' or id < 1 or id % 1 ~= 0 or not ensureSchema() then return false end
-    local ok = pcall(function()
-        MySQL.update.await([[
-            INSERT INTO shift_vehicle_security (vehicle_id, revision) VALUES (?, 2)
-            ON DUPLICATE KEY UPDATE revision = revision + 1
-        ]], { id })
-    end)
-    if not ok then return false end
-    local revision = readRevision(id)
-    if not revision then return false end
-    local vehicle = vehicles[id]
-    if vehicle and DoesEntityExist(vehicle) and vehicleKinds[vehicle] == 'owned' then
-        revisions[vehicle] = revision
-        inventory:SetIgnitionSecurityRevision(vehicle, revision)
-        setPublicIdentity(vehicle, id, 'owned', revision)
-        TriggerClientEvent('qbx_vehiclekeys:ignition:refresh', -1, NetworkGetNetworkIdFromEntity(vehicle))
-    end
-    return revision
-end
-
-exports('ResetIgnitionSecurity', function(id)
-    if GetInvokingResource() ~= 'tc_mechanic' then return false end
-    return resetIgnitionSecurity(id)
-end)
-
-lib.addCommand('shiftresetignition', {
-    help = 'Test: invalider les crochets liés au véhicule conduit',
-    restricted = 'group.admin',
-}, function(source)
-    if GetConvarInt('shift:ignition_test_keys', 0) ~= 1 then return end
-    local vehicle = driverVehicle(source)
-    local id = vehicle and vehicleKinds[vehicle] == 'owned' and vehicleIds[vehicle]
-    if not id then return end
-    local revision = resetIgnitionSecurity(id)
-    exports.qbx_core:Notify(source, revision and ('Antidémarrage réinitialisé (révision %d).'):format(revision)
-        or 'Échec de la réinitialisation.', revision and 'success' or 'error')
-end)
-
-local function securityLevel(vehicle)
-    local security = config.ignitionSecurity or {}
-    local model = GetEntityModel(vehicle)
-    local class = GetVehicleClass and GetVehicleClass(vehicle) or 0
-    return (security.models and security.models[model])
-        or (security.classes and security.classes[class])
-        or security.default or 1
-end
-
-lib.callback.register('qbx_vehiclekeys:ignition:beginHotwire', function(source, netId)
-    local vehicle = driverVehicle(source)
-    if not vehicle or NetworkGetNetworkIdFromEntity(vehicle) ~= netId
-        or not vehicleIds[vehicle] or GetVehicleConfig(vehicle).lockpickImmune
-        or hasIgnitionAccess(source, vehicle) then return false end
-    local now = GetGameTimer()
-    local prior = attempts[source]
-    if prior and (prior.expires or prior.cooldown or 0) > now then return false end
-    local player = exports.qbx_core:GetPlayer(source)
-    if not player then return false end
-    local tool = inventory:GetIgnitionTool(vehicle)
-    if not tool or (tool.name ~= 'lockpick' and tool.name ~= 'advancedlockpick')
-        or tool.metadata.vehicleId ~= nil then return false end
-    local level = securityLevel(vehicle)
-    if level >= 3 and tool.name ~= 'advancedlockpick' then return false end
-    if level >= 2 and not inventory:HasInsertedEcuProgrammer(vehicle) then return false end
-    attempts[source] = {
-        vehicle = vehicle, id = vehicleIds[vehicle], revision = revisions[vehicle],
-        citizenid = player.PlayerData.citizenid, ready = now + 3000, expires = now + 120000,
-        level = level
-    }
-    return { level = level }
-end)
-
-lib.callback.register('qbx_vehiclekeys:ignition:finishHotwire', function(source, netId, clientSuccess)
-    local attempt = attempts[source]
-    if not attempt or attempt.used then return false end
-    attempt.used = true
-    local now = GetGameTimer()
-    attempts[source] = { cooldown = now + 5000 }
-    local vehicle = driverVehicle(source)
-    local player = exports.qbx_core:GetPlayer(source)
-    if not player or attempt.citizenid ~= player.PlayerData.citizenid
-        or now < attempt.ready or now > attempt.expires or vehicle ~= attempt.vehicle
-        or not vehicle or NetworkGetNetworkIdFromEntity(vehicle) ~= netId
-        or vehicleIds[vehicle] ~= attempt.id or revisions[vehicle] ~= attempt.revision then return false end
-
-    local tool = inventory:GetIgnitionTool(vehicle)
-    if not tool or (tool.name ~= 'lockpick' and tool.name ~= 'advancedlockpick')
-        or tool.metadata.vehicleId ~= nil then return false end
-    if attempt.level >= 2 and not inventory:HasInsertedEcuProgrammer(vehicle) then return false end
-
-    -- Lation Pattern Lock (+ Signal Breach for level 2+) is client-side.
-    -- A passed minigame succeeds deterministically once all server checks pass.
-    -- No extra random failure roll after completing both stages.
-    if clientSuccess ~= true then
-        inventory:DamageIgnitionPick(vehicle, 30)
-        return false
-    end
-    if not inventory:BindIgnitionPick(vehicle, attempt.revision) then return false end
-    TriggerClientEvent('qbx_vehiclekeys:ignition:refresh', source, netId)
-    return true
-end)
-
--- ShiftLocal diagnostics: identifies whether a missing Contact is a UI issue or a failed binding.
-lib.addCommand('shiftcontactdebug', {
-    help = 'Diagnostic du Contact et du port ECU du véhicule conduit',
-    restricted = 'group.admin',
-}, function(source)
-    local ped = GetPlayerPed(source)
-    local vehicle = ped ~= 0 and GetVehiclePedIsIn(ped, false) or 0
-    if vehicle == 0 or GetPedInVehicleSeat(vehicle, -1) ~= ped then
-        exports.qbx_core:Notify(source, 'Assieds-toi au volant avant ce diagnostic.', 'error')
-        return
-    end
-    local id, kind = GetIgnitionIdentity(vehicle)
-    local invId = inventory:GetIgnitionVehicleId(vehicle)
-    local invKind = inventory:GetIgnitionVehicleKind(vehicle)
-    local stateId = Entity(vehicle).state.vehicleid
-    local ecuInserted = inventory:HasInsertedEcuProgrammer(vehicle)
-    local message = ('Contact: %s (%s) | Inventaire: %s (%s) | Qbox: %s | ECU: %s')
-        :format(tostring(id), tostring(kind), tostring(invId), tostring(invKind),
-            tostring(stateId), ecuInserted and 'branché' or 'vide')
-    print(('[qbx_vehiclekeys] Diagnostic joueur %d: %s'):format(source, message))
-    exports.qbx_core:Notify(source, message, id and 'inform' or 'error', 12000)
-end)
-
-AddEventHandler('playerDropped', function() attempts[source] = nil end)
-AddEventHandler('QBCore:Server:OnPlayerUnload', function(playerId) attempts[playerId] = nil end)
-
-AddEventHandler('entityRemoved', function(vehicle)
-    local id = vehicleIds[vehicle]
-    if not id then return end
-    vehicleIds[vehicle], vehicleKinds[vehicle], revisions[vehicle], vehicles[id] = nil, nil, nil, nil
-    for playerId, attempt in pairs(attempts) do
-        if attempt.vehicle == vehicle then attempts[playerId] = nil end
-    end
-end)
-
--- Rebuild only from the inventory's trusted bindings after a keys-resource restart.
-AddEventHandler('onResourceStart', function(resource)
-    if resource ~= GetCurrentResourceName() or GetResourceState('ox_inventory') ~= 'started' then return end
-    for _, vehicle in ipairs(GetAllVehicles()) do
-        local id = inventory:GetIgnitionVehicleId(vehicle)
-        local kind = inventory:GetIgnitionVehicleKind(vehicle)
-        if id and kind then
-            vehicleIds[vehicle], vehicleKinds[vehicle], vehicles[id] = id, kind, vehicle
-            revisions[vehicle] = inventory:GetIgnitionSecurityRevision(vehicle) or 1
-            setPublicIdentity(vehicle, id, kind, revisions[vehicle])
-        end
-    end
-end)
-
-AddEventHandler('onResourceStart', function(resource)
-    if resource ~= 'ox_inventory' then return end
-    for vehicle, id in pairs(vehicleIds) do
-        if DoesEntityExist(vehicle)
-            and not inventory:BindVehicleIgnition(vehicle, id, vehicleKinds[vehicle], revisions[vehicle]) then
-            print(('[qbx_vehiclekeys:ignition] Could not restore Contact for %s.'):format(tostring(id)))
-        end
-    end
-end)
-
-AddEventHandler('ox_inventory:ignitionUpdated', function(source, vehicle)
-    if vehicle and driverVehicle(source) == vehicle then
-        TriggerClientEvent('qbx_vehiclekeys:ignition:refresh', source, NetworkGetNetworkIdFromEntity(vehicle))
-    end
-end)
-
-lib.addCommand('shiftcuttestkey', {
-    help = 'Tailler une clé de test pour le véhicule conduit',
-    restricted = 'group.admin',
-}, function(source)
-    if GetConvarInt('shift:ignition_test_keys', 0) ~= 1 then return end
-    local vehicle = driverVehicle(source)
-    local id = vehicle and vehicleKinds[vehicle] == 'owned' and vehicleIds[vehicle]
-    if not id then return end
-    local plate = string.strtrim(GetVehicleNumberPlateText(vehicle))
-    local ok = inventory:AddItem(source, 'vehicle_key', 1, {
-        vehicleId = id, plate = plate, description = ('Plaque : %s'):format(plate),
-    })
-    exports.qbx_core:Notify(source, ok and 'Clé de test taillée.' or 'Impossible de remettre la clé.')
-end)
-):upper() or nil
-end
-
--- Qbox persistence recreates vehicles without tc_garages. The Qbox vehicleid
--- and persistence flag must agree with an OUT database record, model and plate.
--- Never authorize an owned vehicle from a matching plate alone.
+-- Qbox persistence recreates vehicles without tc_garages. Require Qbox's
+-- server-side vehicleid and persistence flag, plus an OUT DB record, model and plate.
+-- Never establish owned identity from a matching plate alone.
 local function validateRestoredVehicle(vehicle, id)
     local state = Entity(vehicle).state
     if state.vehicleid ~= id or state.persisted ~= true then return false end
@@ -349,7 +142,7 @@ local function validateRestoredVehicle(vehicle, id)
     return propsModel == model or namedModel == model
 end
 
--- Server-only restoration. Never accept a client-supplied ID or ownership claim.
+-- Server-only restoration; no client-provided identity, plate lookup, or owner claim.
 function EnsureRestoredIgnition(vehicle)
     if not vehicle or vehicle == 0 or not DoesEntityExist(vehicle) or GetEntityType(vehicle) ~= 2 then return end
     if vehicleIds[vehicle] then
@@ -398,6 +191,7 @@ function RegisterTemporaryIgnition(vehicle)
 end
 
 function GetIgnitionIdentity(vehicle)
+    if vehicle and not vehicleIds[vehicle] then EnsureRestoredIgnition(vehicle) end
     return vehicleIds[vehicle], vehicleKinds[vehicle]
 end
 
@@ -539,26 +333,54 @@ AddEventHandler('playerDropped', function() attempts[source] = nil end)
 AddEventHandler('QBCore:Server:OnPlayerUnload', function(playerId) attempts[playerId] = nil end)
 
 AddEventHandler('entityRemoved', function(vehicle)
+    restoring[vehicle], retryRestoration[vehicle] = nil, nil
     local id = vehicleIds[vehicle]
     if not id then return end
-    vehicleIds[vehicle], vehicleKinds[vehicle], revisions[vehicle], vehicles[id] = nil, nil, nil, nil
+    vehicleIds[vehicle], vehicleKinds[vehicle], revisions[vehicle] = nil, nil, nil
+    if vehicles[id] == vehicle then vehicles[id] = nil end
     for playerId, attempt in pairs(attempts) do
         if attempt.vehicle == vehicle then attempts[playerId] = nil end
     end
 end)
 
--- Rebuild only from the inventory's trusted bindings after a keys-resource restart.
+-- Qbox sets vehicleid after recreating a persisted vehicle.
+-- The entity and persisted state may not yet be available in the same tick.
+AddStateBagChangeHandler('vehicleid', '', function(bagName, _, value)
+    if not validOwnedId(value) then return end
+    CreateThread(function()
+        for _ = 1, 30 do
+            local vehicle = GetEntityFromStateBagName(bagName)
+            if vehicle ~= 0 and DoesEntityExist(vehicle) and GetEntityType(vehicle) == 2 then
+                local state = Entity(vehicle).state
+                if state.vehicleid ~= value then return end
+                if state.persisted == true then
+                    EnsureRestoredIgnition(vehicle)
+                    return
+                end
+            end
+            Wait(100)
+        end
+    end)
+end)
+
+-- On a keys-resource restart, restore trusted inventory bindings and discover
+-- persisted Qbox vehicles which never passed through tc_garages.
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= GetCurrentResourceName() or GetResourceState('ox_inventory') ~= 'started' then return end
-    for _, vehicle in ipairs(GetAllVehicles()) do
-        local id = inventory:GetIgnitionVehicleId(vehicle)
-        local kind = inventory:GetIgnitionVehicleKind(vehicle)
-        if id and kind then
-            vehicleIds[vehicle], vehicleKinds[vehicle], vehicles[id] = id, kind, vehicle
-            revisions[vehicle] = inventory:GetIgnitionSecurityRevision(vehicle) or 1
-            setPublicIdentity(vehicle, id, kind, revisions[vehicle])
+    CreateThread(function()
+        Wait(250)
+        for _, vehicle in ipairs(GetAllVehicles()) do
+            local id = inventory:GetIgnitionVehicleId(vehicle)
+            local kind = inventory:GetIgnitionVehicleKind(vehicle)
+            if id and kind then
+                vehicleIds[vehicle], vehicleKinds[vehicle], vehicles[id] = id, kind, vehicle
+                revisions[vehicle] = inventory:GetIgnitionSecurityRevision(vehicle) or 1
+                setPublicIdentity(vehicle, id, kind, revisions[vehicle])
+            else
+                EnsureRestoredIgnition(vehicle)
+            end
         end
-    end
+    end)
 end)
 
 AddEventHandler('onResourceStart', function(resource)

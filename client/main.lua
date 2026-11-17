@@ -60,9 +60,12 @@ local function onEnteringDriverSeat()
         local authorized = false
         local nextCheck = 0
         local checking = false
-        -- Register ambient Contact lazily before the first authorization check.
-        pcall(lib.callback.await, 'qbx_vehiclekeys:ignition:ensureAmbient', false, VehToNet(vehicle))
+        -- Fail closed immediately; register ambient Contact asynchronously.
         DisableKeySearch()
+        CreateThread(function()
+            pcall(lib.callback.await, 'qbx_vehiclekeys:ignition:ensureAmbient', false, VehToNet(vehicle))
+            if cache.vehicle == vehicle then refreshIgnition = true end
+        end)
 
         while cache.seat == -1 and cache.vehicle == vehicle do
             if not checking and (refreshIgnition or GetGameTimer() >= nextCheck) then

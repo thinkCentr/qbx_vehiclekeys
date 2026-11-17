@@ -201,11 +201,12 @@ end)
 
 RegisterNetEvent('lockpicks:UseLockpick', function(item)
     local isAdvanced = item == true or (type(item) == 'table' and item.name == 'advancedlockpick')
+    local selectedSlot = type(item) == 'table' and item.slot or nil
     local vehicle = cache.vehicle
     if vehicle then
         exports.qbx_core:Notify('Insère le crochet dans Contact, puis tente de démarrer.', 'inform')
     else
-        LockpickDoor(isAdvanced)
+        LockpickDoor(isAdvanced, nil, nil, selectedSlot)
     end
 end)
 

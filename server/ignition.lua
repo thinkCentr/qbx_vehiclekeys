@@ -193,7 +193,7 @@ lib.callback.register('qbx_vehiclekeys:ignition:beginHotwire', function(source, 
     if level >= 2 and inventory:GetItemCount(source, 'ecu_programmer') < 1 then return false end
     attempts[source] = {
         vehicle = vehicle, id = vehicleIds[vehicle], revision = revisions[vehicle],
-        citizenid = player.PlayerData.citizenid, ready = now + 3000, expires = now + 30000,
+        citizenid = player.PlayerData.citizenid, ready = now + 3000, expires = now + 120000,
         level = level
     }
     return { level = level }
@@ -217,10 +217,11 @@ lib.callback.register('qbx_vehiclekeys:ignition:finishHotwire', function(source,
         or tool.metadata.vehicleId ~= nil then return false end
     if attempt.level >= 2 and inventory:GetItemCount(source, 'ecu_programmer') < 1 then return false end
 
-    -- The skill check is visual/client-side. The server also enforces a probability.
-    local chance = ({ 0.85, 0.70, 0.50, 0.30 })[math.min(attempt.level, 4)] or 0.30
-    if clientSuccess ~= true or math.random() > chance then
-        inventory:DamageIgnitionPick(vehicle, clientSuccess and 20 or 30)
+    -- Lation Pattern Lock (+ Signal Breach for level 2+) is client-side.
+    -- A passed minigame succeeds deterministically once all server checks pass.
+    -- No extra random failure roll after completing both stages.
+    if clientSuccess ~= true then
+        inventory:DamageIgnitionPick(vehicle, 30)
         return false
     end
     if not inventory:BindIgnitionPick(vehicle, attempt.revision) then return false end

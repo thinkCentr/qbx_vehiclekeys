@@ -47,4 +47,7 @@ lua54 'yes'
 use_experimental_fxv2_oal 'yes'
 provide 'qb-vehiclekeys'
 
-dependency 'ox_inventory'
+dependencies {
+    'ox_inventory',
+    'lation_ui',
+}

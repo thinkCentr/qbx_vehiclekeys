@@ -152,7 +152,7 @@ local islockpickingProcessLocked = false
 
 -- Door entry: Lation Pattern Lock. The server validates the selected tool and
 -- reserves a single attempt before the UI starts, then revalidates on completion.
-function LockpickDoor(_isAdvancedLockedpick, maxDistance, _customChallenge)
+function LockpickDoor(_isAdvancedLockedpick, maxDistance, _customChallenge, selectedSlot)
     maxDistance = maxDistance or 2
     local pedCoords = GetEntityCoords(cache.ped)
     local vehicle = lib.getClosestVehicle(pedCoords, maxDistance * 2, false)
@@ -174,7 +174,7 @@ function LockpickDoor(_isAdvancedLockedpick, maxDistance, _customChallenge)
     islockpickingProcessLocked = true
     CreateThread(function()
         local netId = VehToNet(vehicle)
-        local ok, attempt = pcall(lib.callback.await, 'qbx_vehiclekeys:server:beginDoorLockpick', false, netId)
+        local ok, attempt = pcall(lib.callback.await, 'qbx_vehiclekeys:server:beginDoorLockpick', false, netId, selectedSlot)
         if not ok or type(attempt) ~= 'table' then
             exports.qbx_core:Notify('Crochetage impossible : crochet manquant ou serrure inaccessible.', 'error')
             islockpickingProcessLocked = false

@@ -190,7 +190,7 @@ lib.callback.register('qbx_vehiclekeys:ignition:beginHotwire', function(source, 
         or tool.metadata.vehicleId ~= nil then return false end
     local level = securityLevel(vehicle)
     if level >= 3 and tool.name ~= 'advancedlockpick' then return false end
-    if level >= 2 and inventory:GetItemCount(source, 'ecu_programmer') < 1 then return false end
+    if level >= 2 and not inventory:HasInsertedEcuProgrammer(vehicle) then return false end
     attempts[source] = {
         vehicle = vehicle, id = vehicleIds[vehicle], revision = revisions[vehicle],
         citizenid = player.PlayerData.citizenid, ready = now + 3000, expires = now + 120000,
@@ -215,7 +215,7 @@ lib.callback.register('qbx_vehiclekeys:ignition:finishHotwire', function(source,
     local tool = inventory:GetIgnitionTool(vehicle)
     if not tool or (tool.name ~= 'lockpick' and tool.name ~= 'advancedlockpick')
         or tool.metadata.vehicleId ~= nil then return false end
-    if attempt.level >= 2 and inventory:GetItemCount(source, 'ecu_programmer') < 1 then return false end
+    if attempt.level >= 2 and not inventory:HasInsertedEcuProgrammer(vehicle) then return false end
 
     -- Lation Pattern Lock (+ Signal Breach for level 2+) is client-side.
     -- A passed minigame succeeds deterministically once all server checks pass.
@@ -227,6 +227,29 @@ lib.callback.register('qbx_vehiclekeys:ignition:finishHotwire', function(source,
     if not inventory:BindIgnitionPick(vehicle, attempt.revision) then return false end
     TriggerClientEvent('qbx_vehiclekeys:ignition:refresh', source, netId)
     return true
+end)
+
+-- ShiftLocal diagnostics: identifies whether a missing Contact is a UI issue or a failed binding.
+lib.addCommand('shiftcontactdebug', {
+    help = 'Diagnostic du Contact et du port ECU du véhicule conduit',
+    restricted = 'group.admin',
+}, function(source)
+    local ped = GetPlayerPed(source)
+    local vehicle = ped ~= 0 and GetVehiclePedIsIn(ped, false) or 0
+    if vehicle == 0 or GetPedInVehicleSeat(vehicle, -1) ~= ped then
+        exports.qbx_core:Notify(source, 'Assieds-toi au volant avant ce diagnostic.', 'error')
+        return
+    end
+    local id, kind = GetIgnitionIdentity(vehicle)
+    local invId = inventory:GetIgnitionVehicleId(vehicle)
+    local invKind = inventory:GetIgnitionVehicleKind(vehicle)
+    local stateId = Entity(vehicle).state.vehicleid
+    local ecuInserted = inventory:HasInsertedEcuProgrammer(vehicle)
+    local message = ('Contact: %s (%s) | Inventaire: %s (%s) | Qbox: %s | ECU: %s')
+        :format(tostring(id), tostring(kind), tostring(invId), tostring(invKind),
+            tostring(stateId), ecuInserted and 'branché' or 'vide')
+    print(('[qbx_vehiclekeys] Diagnostic joueur %d: %s'):format(source, message))
+    exports.qbx_core:Notify(source, message, id and 'inform' or 'error', 12000)
 end)
 
 AddEventHandler('playerDropped', function() attempts[source] = nil end)

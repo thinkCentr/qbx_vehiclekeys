@@ -126,10 +126,9 @@ exports('GetBoundVehicle', function(id)
     return vehicle and DoesEntityExist(vehicle) and vehicle or nil
 end)
 
--- Reserved for tc_mechanic. Never callable directly by clients.
-exports('ResetIgnitionSecurity', function(id)
-    if GetInvokingResource() ~= 'tc_mechanic' or type(id) ~= 'number'
-        or id < 1 or id % 1 ~= 0 or not ensureSchema() then return false end
+-- The trusted mechanic export and gated admin test command share this operation.
+local function resetIgnitionSecurity(id)
+    if type(id) ~= 'number' or id < 1 or id % 1 ~= 0 or not ensureSchema() then return false end
     local ok = pcall(function()
         MySQL.update.await([[
             INSERT INTO shift_vehicle_security (vehicle_id, revision) VALUES (?, 2)
@@ -147,6 +146,24 @@ exports('ResetIgnitionSecurity', function(id)
         TriggerClientEvent('qbx_vehiclekeys:ignition:refresh', -1, NetworkGetNetworkIdFromEntity(vehicle))
     end
     return revision
+end
+
+exports('ResetIgnitionSecurity', function(id)
+    if GetInvokingResource() ~= 'tc_mechanic' then return false end
+    return resetIgnitionSecurity(id)
+end)
+
+lib.addCommand('shiftresetignition', {
+    help = 'Test: invalider les crochets liés au véhicule conduit',
+    restricted = 'group.admin',
+}, function(source)
+    if GetConvarInt('shift:ignition_test_keys', 0) ~= 1 then return end
+    local vehicle = driverVehicle(source)
+    local id = vehicle and vehicleKinds[vehicle] == 'owned' and vehicleIds[vehicle]
+    if not id then return end
+    local revision = resetIgnitionSecurity(id)
+    exports.qbx_core:Notify(source, revision and ('Antidémarrage réinitialisé (révision %d).'):format(revision)
+        or 'Échec de la réinitialisation.', revision and 'success' or 'error')
 end)
 
 local function securityLevel(vehicle)

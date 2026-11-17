@@ -16,7 +16,7 @@ local function nearbyVehicle(source, netId)
     if IsPlayerNearVehicle(source, vehicle) then return vehicle end
 end
 
-local searched, carjacked, lockpicked = {}, {}, {}
+local searched, carjacked, lockpicked, doorAttempts = {}, {}, {}, {}
 
 local function isTrafficVehicle(vehicle)
     local _, kind = GetIgnitionIdentity(vehicle)
@@ -71,28 +71,69 @@ lib.callback.register('qbx_vehiclekeys:server:hasPhysicalKey', function(source, 
     return vehicle ~= nil and HasKeys(source, vehicle)
 end)
 
-lib.callback.register('qbx_vehiclekeys:server:lockpickDoor', function(source, netId)
-    local vehicle = nearbyVehicle(source, netId)
-    if not vehicle or GetPedInVehicleSeat(vehicle, -1) ~= 0 or GetVehicleConfig(vehicle).lockpickImmune then
-        return false
-    end
-    local now = GetGameTimer()
-    if lockpicked[vehicle] and lockpicked[vehicle] > now then return false end
-    lockpicked[vehicle] = now + 5000
+-- Door lockpicking uses Lation Pattern Lock. Its UI result is client-reported,
+-- so the server independently validates location, tool, lock state, and elapsed time.
+local function availablePick(source)
     local inv = exports.ox_inventory
-    local tool
     for _, name in ipairs({ 'advancedlockpick', 'lockpick' }) do
         for _, item in pairs(inv:Search(source, 'slots', name) or {}) do
             if not item.metadata or item.metadata.vehicleId == nil then
-                tool = item
-                break
+                return item
             end
         end
-        if tool then break end
     end
-    if not tool then return false end
-    if math.random() > 0.75 then
-        inv:RemoveItem(source, tool.name, 1, tool.metadata, tool.slot, false, true)
+end
+
+local function validDoorAttempt(source, vehicle)
+    if not vehicle or GetPedInVehicleSeat(vehicle, -1) ~= 0
+        or GetVehicleConfig(vehicle).lockpickImmune
+        or Entity(vehicle).state.doorslockstate ~= 2 then return false end
+    local ped = GetPlayerPed(source)
+    return ped ~= 0 and GetVehiclePedIsIn(ped, false) == 0
+        and #(GetEntityCoords(ped) - GetEntityCoords(vehicle)) <= 4.0
+end
+
+lib.callback.register('qbx_vehiclekeys:server:beginDoorLockpick', function(source, netId)
+    local vehicle = nearbyVehicle(source, netId)
+    if not validDoorAttempt(source, vehicle) then return false end
+    local now = GetGameTimer()
+    local prior = doorAttempts[source]
+    if prior and (prior.expires or prior.cooldown or 0) > now then return false end
+    if lockpicked[vehicle] and lockpicked[vehicle] > now then return false end
+    local tool = availablePick(source)
+    local player = exports.qbx_core:GetPlayer(source)
+    if not tool or not player then return false end
+    doorAttempts[source] = {
+        vehicle = vehicle, toolName = tool.name, toolSlot = tool.slot,
+        citizenid = player.PlayerData.citizenid,
+        ready = now + 1500, expires = now + 90000,
+    }
+    lockpicked[vehicle] = now + 5000
+    return { advanced = tool.name == 'advancedlockpick' }
+end)
+
+lib.callback.register('qbx_vehiclekeys:server:finishDoorLockpick', function(source, netId, clientSuccess)
+    local attempt = doorAttempts[source]
+    if not attempt or attempt.used then return false end
+    attempt.used = true
+    local now = GetGameTimer()
+    doorAttempts[source] = { cooldown = now + 5000 }
+    local vehicle = nearbyVehicle(source, netId)
+    local player = exports.qbx_core:GetPlayer(source)
+    if not player or attempt.citizenid ~= player.PlayerData.citizenid
+        or vehicle ~= attempt.vehicle or now < attempt.ready or now > attempt.expires
+        or not validDoorAttempt(source, vehicle) then return false end
+    local inv = exports.ox_inventory
+    local item = inv:GetSlot(source, attempt.toolSlot)
+    if not item or item.name ~= attempt.toolName
+        or (item.metadata and item.metadata.vehicleId ~= nil) then return false end
+    if clientSuccess ~= true then
+        local durability = tonumber(item.metadata and item.metadata.durability) or 100
+        if durability <= 20 then
+            inv:RemoveItem(source, item.name, 1, item.metadata, attempt.toolSlot, false, true)
+        else
+            inv:SetDurability(source, attempt.toolSlot, durability - 20)
+        end
         return false
     end
     setLockState(vehicle, 'unlock')
@@ -120,6 +161,11 @@ RegisterNetEvent('qb-vehiclekeys:server:setVehLockState', function(netId, state)
     setLockState(vehicle, state == 2 and 'lock' or 'unlock')
 end)
 
+AddEventHandler('playerDropped', function() doorAttempts[source] = nil end)
+
 AddEventHandler('entityRemoved', function(vehicle)
     searched[vehicle], carjacked[vehicle], lockpicked[vehicle] = nil, nil, nil
+    for playerId, attempt in pairs(doorAttempts) do
+        if attempt.vehicle == vehicle then doorAttempts[playerId] = nil end
+    end
 end)

@@ -110,5 +110,5 @@ Start `oxmysql`, `ox_lib`, `qbx_core`, `qbx_vehicles`, `lation_ui`, the **built*
 - A real panic-abandonment signal (without qbx carjack) needs a trusted NPC-driver lifecycle source.
 - Temporary-to-owned vehicle promotion is not implemented; registration must be server-authorized when a vehicle is legitimately acquired.
 - Vehicle security profiles need tuning after real-world tests; GTA classes are only a starting point.
-- Client-side skill checks are not trusted alone: the server enforces seating, inserted tool, time, equipment, identity, revision, cooldown and independent success chance.
+- Client-side skill checks are not trusted alone: the server enforces seating, inserted tool, time, equipment, identity, revision and cooldown. There is no extra random success roll after the minigames.
 - The code has been committed to development branches, but no ShiftLocal runtime or ox_inventory frontend build has been performed here.

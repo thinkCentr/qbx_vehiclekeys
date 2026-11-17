@@ -191,60 +191,44 @@ end
 
 ---Will be executed when the lock opening is successful.
 ---@param vehicle number The entity number of the vehicle.
-local function hotwireSuccessCallback(vehicle)
-    if not lib.callback.await('qbx_vehiclekeys:ignition:finishHotwire', false, VehToNet(vehicle)) then
-        exports.qbx_core:Notify(locale('notify.failed_lockedpick'), 'error')
-    end
-end
+local isHotwiringProcessLocked = false
 
----Operations done after the LockpickDoor quickevent done.
----@param vehicle number The entity number of the vehicle.
----@param isAdvancedLockedpick boolean Determines whether an advanced lockpick was used.
----@param isSuccess boolean? Determines whether the lock has been successfully opened.
-local function hotwireCallback(vehicle, isAdvancedLockedpick, isSuccess)
-    if isSuccess then
-        hotwireSuccessCallback(vehicle)
-    else -- if player fails quickevent
-        SendPoliceAlertAttempt('carjack', vehicle)
-        TriggerServerEvent('hud:server:GainStress', math.random(1, 4))
-        exports.qbx_core:Notify(locale('notify.failed_lockedpick'), 'error')
-    end
-
-end
-
-local isHotwiringProcessLocked = false -- lock flag
----Hotwiring with a tool quickevent.
----@param vehicle number The entity number of the vehicle.
----@param isAdvancedLockedpick boolean Determines whether an advanced lockpick was used
----@param customChallenge boolean? lockpick challenge
-function Hotwire(vehicle, isAdvancedLockedpick, customChallenge)
-    if cache.seat ~= -1 then return end
-    local skillCheckConfig = config.skillCheck[isAdvancedLockedpick and 'advancedHotwire' or 'hotwire']
-
-    skillCheckConfig = skillCheckConfig.model[GetEntityModel(vehicle)]
-        or skillCheckConfig.class[GetVehicleClass(vehicle)]
-        or skillCheckConfig.default
-    if not next(skillCheckConfig) then return end
-
-    if isHotwiringProcessLocked then return end -- start of the critical section
-    isHotwiringProcessLocked = true -- one call per player at a time
-
+-- The pick must already be physically inserted in Contact.
+-- The server independently validates the tool, security profile, elapsed time and outcome.
+function Hotwire(vehicle, _, customChallenge)
+    if cache.seat ~= -1 or isHotwiringProcessLocked then return end
+    isHotwiringProcessLocked = true
     CreateThread(function()
-        if not lib.callback.await('qbx_vehiclekeys:ignition:beginHotwire', false, VehToNet(vehicle)) then
+        local attempt = lib.callback.await('qbx_vehiclekeys:ignition:beginHotwire', false, VehToNet(vehicle))
+        if not attempt or type(attempt) ~= 'table' then
+            exports.qbx_core:Notify('Contact invalide ou équipement ECU requis.', 'error')
             isHotwiringProcessLocked = false
             return
         end
+
+        local level = math.min(4, math.max(1, tonumber(attempt.level) or 1))
+        local difficulties = {
+            [1] = { 'easy', 'easy', 'medium' },
+            [2] = { 'easy', 'medium', 'medium' },
+            [3] = { 'medium', 'hard', 'hard' },
+            [4] = { 'hard', 'hard', 'hard', 'hard' },
+        }
         local start = GetGameTimer()
         local anim = config.anims.hotwire.model[GetEntityModel(vehicle)]
-        or config.anims.hotwire.class[GetVehicleClass(vehicle)]
-        or config.anims.hotwire.default
-        lib.playAnim(cache.ped, anim.dict, anim.clip, 3.0, 3.0, -1, 16, 0, false, false, false) -- lock opening animation
-        local isSuccess = customChallenge or lib.skillCheck(skillCheckConfig.difficulty, skillCheckConfig.inputs)
-
+            or config.anims.hotwire.class[GetVehicleClass(vehicle)]
+            or config.anims.hotwire.default
+        lib.playAnim(cache.ped, anim.dict, anim.clip, 3.0, 3.0, -1, 16, 0, false, false, false)
+        local passed = customChallenge or lib.skillCheck(difficulties[level], { '1', '2', '3', '4' })
         Wait(math.max(0, 3100 - (GetGameTimer() - start)))
-        hotwireCallback(vehicle, isAdvancedLockedpick, isSuccess)
 
+        local success = lib.callback.await('qbx_vehiclekeys:ignition:finishHotwire', false, VehToNet(vehicle), passed == true)
+        if success then
+            exports.qbx_core:Notify('Contact contourné. Le crochet est maintenant lié au véhicule.', 'success')
+        else
+            SendPoliceAlertAttempt('carjack', vehicle)
+            exports.qbx_core:Notify('Le contournement du Contact a échoué.', 'error')
+        end
         Wait(config.hotwireCooldown)
-        isHotwiringProcessLocked = false -- end of the critical section
+        isHotwiringProcessLocked = false
     end)
 end

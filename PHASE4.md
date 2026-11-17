@@ -32,6 +32,39 @@ The previous `lib.skillCheck()` calls have been removed from door lockpicking an
 
 **Security limitation:** Lation minigame completion is client-reported; the server cannot independently verify what happened inside the UI. The server validates the attempt context and minimum elapsed time, but a modified client could spoof the boolean. Consider an anti-cheat strategy before production if this is a high-risk theft loop.
 
+## Persistent owned vehicles (Qbox full/semi persistence)
+
+Qbox may recreate an OUT vehicle without calling tc_garages. `server/ignition.lua`
+now discovers that vehicle from the Qbox `vehicleid` statebag, checks its
+`persisted` flag, validates the OUT `qbx_vehicles` database record, plate and
+model, then restores the **same** numeric vehicle ID, Contact, ECU and security
+revision. No new key is minted and no garage visit is required.
+
+The recovery path runs when Qbox sets `vehicleid`, when the keys resource
+starts with existing vehicles, and on demand when checking keys or observing
+a vehicle. It does not authorize a vehicle by plate alone and never trusts a
+client-supplied ID. Normal tc_garages registration remains unchanged.
+
+Test on ShiftLocal:
+1. Retrieve an owned vehicle, confirm Contact/ECU and physical key unlocking.
+2. Leave it outside, disconnect and restart the server with
+   `qbx:enableVehiclePersistence=true` and full persistence as configured.
+3. Reconnect, approach the restored locked vehicle and unlock using the
+   existing `vehicle_key` item. No new key or garage retrieval.
+4. Enter and confirm both ports show the same saved contents.
+5. From **outside** a locked vehicle, run admin `/shiftcontactdebug`.
+   It reports Qbox vehicle ID, persistence flag, inventory binding, and
+   whether the player has a matching physical key.
+6. Test a vehicle respawned by Qbox after entity deletion (semi persistence),
+   then a garage/impound spawn, and confirm no duplicate vehicle bindings.
+7. Confirm that matching plates on unregistered NPC traffic **do not**
+   grant access and that a virtual/legacy session key without a physical
+   `vehicle_key` item does not bypass the physical-key requirement.
+
+Only `qbx_vehiclekeys` needs updating for this checkpoint; the current
+Phase 4 `ox_inventory` build is unchanged. FiveM runtime testing is still
+required.
+
 ## Vehicle port recovery checkpoint (Nov 17)
 
 The original Phase 4 inventory ZIP contained **no ECU slot**, and the Contact UI only accepted `vehicle_key` even though the server allowed lockpicks. Both have been corrected on `feature/vehicle-ignition-phase4`.

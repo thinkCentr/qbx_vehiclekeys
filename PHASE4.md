@@ -14,7 +14,7 @@ Back up ShiftLocal resources and its database. Do not deploy this checkpoint to 
 2. NPC traffic is registered lazily when approached, carjacked or driven. Temporary identity is `temp:<boot nonce>:<sequence>`, with `shiftVehicleType=temporary`. Temporary Contact inventories use memory only and are never saved to the database.
 3. NPC driving when observed gets an ambient key in Contact. A normal NPC departure removes that original ambient key. A successful qbx carjack or taking a dead driver's key preserves it. A generic panic abandonment not handled by those events is **not yet reliably distinguished**.
 4. Parked traffic has empty Contact. Insert an unbound `lockpick` or `advancedlockpick`, then use the normal engine key to attempt bypass. A successful pick becomes a vehicle-bound "Clé improvisée" and remains usable only for that vehicle/security revision.
-5. Security levels are configurable in `qbx_vehiclekeys/config/server.lua`. Level 2+ needs `ecu_programmer` in player inventory; levels 3+ also need `advancedlockpick`. ECU inventory port is **not yet implemented**; this is the electronic-tool prerequisite only.
+5. Security levels are configurable in `qbx_vehiclekeys/config/server.lua`. Level 2+ requires an `ecu_programmer` physically inserted in the ECU/OBD port; levels 3+ also need `advancedlockpick`. Both ports appear only while driving a registered vehicle.
 6. Player-owned vehicle security revisions persist in `shift_vehicle_security`, created automatically by qbx_vehiclekeys. The `ResetIgnitionSecurity(vehicleId)` server export is reserved for future `tc_mechanic`. It invalidates bypass picks, not legitimate vehicle keys.
 7. `/shiftresetignition` is a temporary admin test command while driving an owned vehicle, gated by `set shift:ignition_test_keys 1`. Disable that convar after testing.
 
@@ -25,12 +25,23 @@ The previous `lib.skillCheck()` calls have been removed from door lockpicking an
 
 - **Locked door**: Lation `patternLock('Crochetage de serrure', difficulty)`. Basic and advanced lockpicks have separate configurable profiles in `config/client.lua`.
 - **Mechanical Contact, level 1**: Lation `patternLock('Crochetage du contact', {'easy'})`.
-- **Electronic Contact, level 2+**: Pattern Lock first, followed by Lation `signalBreach('Contournement électronique', difficulty, inputs, options)`. The ECU programmer is still a carried item, **not** a dedicated ECU inventory slot.
+- **Electronic Contact, level 2+**: Pattern Lock first, followed by Lation `signalBreach('Contournement électronique', difficulty, inputs, options)`. The ECU programmer must be physically inserted in the new **ECU / OBD** inventory slot beside Contact.
 - **Difficulty**: Level 2 uses medium Pattern Lock + easy Signal Breach; level 3 uses medium/hard Pattern Lock + medium Signal Breach; level 4 uses hard/hard Pattern Lock + hard Signal Breach.
 - **Success**: There is no extra random failure after passing the minigames. Server checks still enforce the selected inventory tool, vehicle, proximity/driver seat, timing, security revision, cooldown, and ECU equipment. Failed door attempts reduce lockpick durability by 20; failed Contact attempts damage the inserted pick by 30.
 - **Fail closed**: Missing/unavailable `lation_ui` blocks the minigames rather than silently falling back to ox_lib.
 
 **Security limitation:** Lation minigame completion is client-reported; the server cannot independently verify what happened inside the UI. The server validates the attempt context and minimum elapsed time, but a modified client could spoof the boolean. Consider an anti-cheat strategy before production if this is a high-risk theft loop.
+
+## Vehicle port recovery checkpoint (Nov 17)
+
+The original Phase 4 inventory ZIP contained **no ECU slot**, and the Contact UI only accepted `vehicle_key` even though the server allowed lockpicks. Both have been corrected on `feature/vehicle-ignition-phase4`.
+
+- Contact and ECU now render from the same server-authorized inventory-open response, avoiding an event-order race that could hide Contact.
+- Contact accepts matching physical keys, unbound lockpicks, and vehicle-bound picks; ECU accepts only `ecu_programmer`.
+- ECU is a separate one-slot inventory (`shift:ecu:<id>`). Owned vehicles persist both ports across garage storage and restart. Temporary NPC vehicles keep both ports in memory only.
+- `/shiftcontactdebug` is an admin command on the keys branch. If both slots remain hidden while driving, check that qbx_vehiclekeys registered the vehicle and that ox_inventory has the same binding.
+- **Install both latest branches together**, and download a newly completed GitHub Actions artifact for ox_inventory; the old ZIP cannot show the new port. Do not replace ShiftLocal's tested tc_garages resource.
+- The NUI has been built by GitHub Actions, but FiveM behavior has **not yet been verified**.
 
 ## Startup
 
@@ -43,7 +54,7 @@ Start `oxmysql`, `ox_lib`, `qbx_core`, `qbx_vehicles`, `lation_ui`, the **built*
 3. Another NPC vehicle: bound pick must be rejected by Contact.
 4. NPC carjack: key already in Contact before NPC leaves; player can drive immediately. Removing key kills engine.
 5. Observe an NPC driver who parks and leaves normally: Contact key should be removed.
-6. Owned vehicle: lockpick can bypass. On a level 2+ vehicle the `ecu_programmer` item is required. Test wrong key rejection and the physical key still working afterward.
+6. Owned vehicle: lockpick can bypass. On a level 2+ vehicle the `ecu_programmer` must be inserted in the ECU/OBD port. Test wrong key rejection and the physical key still working afterward.
 7. Owned security reset: enable test convar, drive the owned vehicle and use `/shiftresetignition`; bound bypass pick stops working, legitimate physical key still works, and reset persists across garage storage/server restart.
 8. Restart only qbx_vehiclekeys and then ox_inventory while observing a temporary vehicle; report any Contact loss or desync. Temporary identities intentionally do not survive a full server restart.
 
@@ -56,10 +67,13 @@ Start `oxmysql`, `ox_lib`, `qbx_core`, `qbx_vehicles`, `lation_ui`, the **built*
 5. Bypass level-2/3/4 Contact: **Pattern Lock then Signal Breach**; cancel or fail either stage and confirm the engine remains disabled.
 6. Complete both stages successfully: the inserted pick binds to the vehicle, with **no extra random failure**.
 7. Stop `lation_ui` on ShiftLocal: verify theft minigames fail closed. Restart it and retest.
+8. Confirm Contact and ECU appear side by side only for the driver. A matching key or lockpick belongs in Contact; `ecu_programmer` belongs in ECU.
+9. Store an owned vehicle with an ECU programmer plugged in; retrieve it and restart the server to verify both port inventories persist.
+10. While driving a vehicle with a missing Contact, run admin `/shiftcontactdebug` and compare qbx identity, inventory binding and Qbox state in the server console.
 
 ## Limitations / next checkpoint
 
-- The separate ECU/OBD inventory slot, mechanic diagnostics, ECU tuning and tc_mechanic authorization UI are **not** included yet.
+- The ECU/OBD inventory slot is implemented for the `ecu_programmer` item. Mechanic diagnostics, ECU tuning and tc_mechanic authorization UI are **not** included yet.
 - A real panic-abandonment signal (without qbx carjack) needs a trusted NPC-driver lifecycle source.
 - Temporary-to-owned vehicle promotion is not implemented; registration must be server-authorized when a vehicle is legitimately acquired.
 - Vehicle security profiles need tuning after real-world tests; GTA classes are only a starting point.

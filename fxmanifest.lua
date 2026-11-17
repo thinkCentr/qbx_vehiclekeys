@@ -31,6 +31,7 @@ server_scripts {
     'server/version.lua',
     'server/ignition.lua',
     'server/keys.lua',
+    'server/ambient.lua',
     'server/main.lua',
     'server/commands.lua',
     'bridge/qb/server.lua',

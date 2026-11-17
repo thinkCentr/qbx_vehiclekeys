@@ -72,6 +72,7 @@ CreateThread(function()
                 if driver ~= originalDriver then
                     if not preserved[vehicle] then
                         inventory:RemoveAmbientIgnitionKey(vehicle)
+                        issued[vehicle] = nil
                     end
                     npcDrivers[vehicle] = nil
                 elseif GetEntityHealth(originalDriver) <= 0 then

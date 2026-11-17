@@ -32,21 +32,8 @@ end
 function HasKeys(vehicle)
     vehicle = vehicle or cache.vehicle
     if not vehicle then return false end
-    local keysList = LocalPlayer.state.keysList
-    if keysList then
-        local sessionId = Entity(vehicle).state.sessionId
-        if keysList[sessionId] then
-            return true
-        end
-    end
-
-    local owner = Entity(vehicle).state.owner
-    if owner and QBX.PlayerData.citizenid == owner then
-        lib.callback.await('qbx_vehiclekeys:server:giveKeys', false, VehToNet(vehicle))
-        return true
-    end
-
-    return false
+    local ok, allowed = pcall(lib.callback.await, 'qbx_vehiclekeys:server:hasPhysicalKey', false, VehToNet(vehicle))
+    return ok and allowed == true
 end
 
 exports('HasKeys', HasKeys)
@@ -126,26 +113,15 @@ end
 ---Chance to destroy lockpick
 ---@param isAdvancedLockedpick any
 ---@param vehicle number
-local function breakLockpick(isAdvancedLockedpick, vehicle)
-    local chance = math.random()
-    local vehicleConfig = GetVehicleConfig(vehicle)
-    if isAdvancedLockedpick then -- there is no benefit to using an advanced tool in the default configuration.
-        if chance <= vehicleConfig.removeAdvancedLockpickChance then
-            TriggerServerEvent("qb-vehiclekeys:server:breakLockpick", "advancedlockpick")
-        end
-    else
-        if chance <= vehicleConfig.removeNormalLockpickChance then
-            TriggerServerEvent("qb-vehiclekeys:server:breakLockpick", "lockpick")
-        end
-    end
-end
-
 ---Will be executed when the lock opening is successful.
 ---@param vehicle number The entity number of the vehicle.
 local function lockpickSuccessCallback(vehicle)
     TriggerServerEvent('hud:server:GainStress', math.random(1, 4))
-    exports.qbx_core:Notify(locale("notify.vehicle_lockedpick"), 'success')
-    TriggerServerEvent('qb-vehiclekeys:server:setVehLockState', NetworkGetNetworkIdFromEntity(vehicle), 1)
+    if lib.callback.await('qbx_vehiclekeys:server:lockpickDoor', false, VehToNet(vehicle)) then
+        exports.qbx_core:Notify(locale('notify.vehicle_lockedpick'), 'success')
+    else
+        exports.qbx_core:Notify(locale('notify.failed_lockedpick'), 'error')
+    end
 end
 
 ---Operations done after the LockpickDoor quickevent done.
@@ -163,7 +139,6 @@ local function lockpickCallback(vehicle, isAdvancedLockedpick, isSuccess)
         exports.qbx_core:Notify(locale('notify.failed_lockedpick'), 'error')
     end
 
-    breakLockpick(isAdvancedLockedpick, vehicle)
 end
 
 local islockpickingProcessLocked = false -- lock flag
@@ -217,7 +192,9 @@ end
 ---Will be executed when the lock opening is successful.
 ---@param vehicle number The entity number of the vehicle.
 local function hotwireSuccessCallback(vehicle)
-    TriggerServerEvent('qbx_vehiclekeys:server:hotwiredVehicle', VehToNet(vehicle))
+    if not lib.callback.await('qbx_vehiclekeys:ignition:finishHotwire', false, VehToNet(vehicle)) then
+        exports.qbx_core:Notify(locale('notify.failed_lockedpick'), 'error')
+    end
 end
 
 ---Operations done after the LockpickDoor quickevent done.
@@ -233,7 +210,6 @@ local function hotwireCallback(vehicle, isAdvancedLockedpick, isSuccess)
         exports.qbx_core:Notify(locale('notify.failed_lockedpick'), 'error')
     end
 
-    breakLockpick(isAdvancedLockedpick, vehicle)
 end
 
 local isHotwiringProcessLocked = false -- lock flag
@@ -242,7 +218,7 @@ local isHotwiringProcessLocked = false -- lock flag
 ---@param isAdvancedLockedpick boolean Determines whether an advanced lockpick was used
 ---@param customChallenge boolean? lockpick challenge
 function Hotwire(vehicle, isAdvancedLockedpick, customChallenge)
-    if cache.seat ~= -1 or GetIsVehicleAccessible(vehicle) then return end
+    if cache.seat ~= -1 then return end
     local skillCheckConfig = config.skillCheck[isAdvancedLockedpick and 'advancedHotwire' or 'hotwire']
 
     skillCheckConfig = skillCheckConfig.model[GetEntityModel(vehicle)]
@@ -254,12 +230,18 @@ function Hotwire(vehicle, isAdvancedLockedpick, customChallenge)
     isHotwiringProcessLocked = true -- one call per player at a time
 
     CreateThread(function()
+        if not lib.callback.await('qbx_vehiclekeys:ignition:beginHotwire', false, VehToNet(vehicle)) then
+            isHotwiringProcessLocked = false
+            return
+        end
+        local start = GetGameTimer()
         local anim = config.anims.hotwire.model[GetEntityModel(vehicle)]
         or config.anims.hotwire.class[GetVehicleClass(vehicle)]
         or config.anims.hotwire.default
         lib.playAnim(cache.ped, anim.dict, anim.clip, 3.0, 3.0, -1, 16, 0, false, false, false) -- lock opening animation
         local isSuccess = customChallenge or lib.skillCheck(skillCheckConfig.difficulty, skillCheckConfig.inputs)
 
+        Wait(math.max(0, 3100 - (GetGameTimer() - start)))
         hotwireCallback(vehicle, isAdvancedLockedpick, isSuccess)
 
         Wait(config.hotwireCooldown)

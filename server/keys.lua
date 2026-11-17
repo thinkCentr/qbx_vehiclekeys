@@ -1,4 +1,5 @@
 local config = require 'config.server'
+local lockGrants = {}
 local debug = GetConvarInt(('%s-debug'):format(GetCurrentResourceName()), 0) == 1
 
 ---@alias CitizenId string
@@ -64,6 +65,7 @@ function RemoveKeys(source, vehicle, skipNotification)
     local citizenid = getCitizenId(source)
     if not citizenid then return end
 
+    if lockGrants[vehicle] then lockGrants[vehicle][citizenid] = nil end
     local keys = Player(source).state.keysList
     if not keys then return end
 
@@ -90,6 +92,9 @@ function GiveKeys(source, vehicle, skipNotification)
     local citizenid = getCitizenId(source)
     if not citizenid then return end
 
+    if not DoesEntityExist(vehicle) or GetEntityType(vehicle) ~= 2 then return end
+    lockGrants[vehicle] = lockGrants[vehicle] or {}
+    lockGrants[vehicle][citizenid] = true
     local sessionId = Entity(vehicle).state.sessionId or exports.qbx_core:CreateSessionId(vehicle)
     local keys = Player(source).state.keysList or {}
     if keys[sessionId] then return end
@@ -109,22 +114,12 @@ exports('GiveKeys', GiveKeys)
 ---@param vehicle number
 ---@return boolean
 function HasKeys(src, vehicle)
-    local keysList = Player(src).state.keysList
-    if keysList then
-        local sessionId = Entity(vehicle).state.sessionId
-        if keysList[sessionId] then
-            return true
-        end
-    end
-
-    local owner = Entity(vehicle).state.owner
-    if owner and getCitizenId(src) == owner then
-        GiveKeys(src, vehicle)
-        return true
-    end
-
-    return false
+    return HasPhysicalKey(src, vehicle)
+        or (lockGrants[vehicle] and lockGrants[vehicle][getCitizenId(src)] == true)
+        or false
 end
+
+AddEventHandler('entityRemoved', function(vehicle) lockGrants[vehicle] = nil end)
 
 exports('HasKeys', HasKeys)
 
@@ -135,7 +130,8 @@ exports('HasKeys', HasKeys)
 ---@param vehicle number
 ---@return boolean
 function IsPlayerNearVehicle(source, vehicle)
-    if not vehicle or vehicle == 0 or not DoesEntityExist(vehicle) then return false end
+    if not vehicle or vehicle == 0 or not DoesEntityExist(vehicle) or GetEntityType(vehicle) ~= 2 then return false end
+    if GetEntityRoutingBucket(vehicle) ~= GetPlayerRoutingBucket(source) then return false end
     local ped = GetPlayerPed(source)
     if ped == 0 then return false end
     return #(GetEntityCoords(ped) - GetEntityCoords(vehicle)) <= config.distanceToVehicle
@@ -144,9 +140,9 @@ end
 exports('IsPlayerNearVehicle', IsPlayerNearVehicle)
 
 lib.callback.register('qbx_vehiclekeys:server:giveKeys', function(source, netId)
+    if type(netId) ~= 'number' then return false end
     local vehicle = NetworkGetEntityFromNetworkId(netId)
-    if not IsPlayerNearVehicle(source, vehicle) then return end
-    GiveKeys(source, vehicle)
+    return IsPlayerNearVehicle(source, vehicle) and HasKeys(source, vehicle)
 end)
 
 AddStateBagChangeHandler('vehicleid', '', function(bagName, _, vehicleId)

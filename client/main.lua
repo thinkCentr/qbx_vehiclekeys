@@ -37,57 +37,57 @@ local function toggleLock(vehicle)
     end
 end
 
----if the player does not have ignition access to the vehicle:
----check whether to give keys if engine is on
----disable the engine and listen for search keys if applicable to the vehicle
+local function canStart(vehicle)
+    local ok, authorized = pcall(lib.callback.await, 'qbx_vehiclekeys:ignition:canStart', false, VehToNet(vehicle))
+    return ok and authorized == true
+end
+
+local monitoredVehicle
+local refreshIgnition = true
+
+RegisterNetEvent('qbx_vehiclekeys:ignition:refresh', function(netId)
+    if source ~= 65535 or not cache.vehicle or VehToNet(cache.vehicle) ~= netId then return end
+    refreshIgnition = true
+end)
+
 local function onEnteringDriverSeat()
     local vehicle = cache.vehicle
+    if not vehicle or monitoredVehicle == vehicle then return end
+    monitoredVehicle = vehicle
     EngineBind:disable(false)
+
     CreateThread(function()
-        while cache.seat == -1 do
-            if IsControlJustPressed(0, 23) then -- vehicle enter/leave input
-                EngineBind:disable(true)
+        local authorized = false
+        local nextCheck = 0
+        local checking = false
+        local config = GetVehicleConfig(vehicle)
+        if config.findKeysChance ~= 0.0 then EnableKeySearch() end
+
+        while cache.seat == -1 and cache.vehicle == vehicle do
+            if not checking and (refreshIgnition or GetGameTimer() >= nextCheck) then
+                refreshIgnition = false
+                checking = true
+                CreateThread(function()
+                    authorized = canStart(vehicle)
+                    if authorized then DisableKeySearch() end
+                    nextCheck = GetGameTimer() + 2500
+                    checking = false
+                end)
             end
+
+            if not authorized then
+                SetVehicleEngineOn(vehicle, false, true, true)
+                DisableControlAction(0, 71, true)
+            end
+
+            if IsControlJustPressed(0, 23) then EngineBind:disable(true) end
             Wait(0)
         end
-    end)
-
-    local vehicleConfig = GetVehicleConfig(vehicle)
-    if vehicleConfig.shared then return end
-
-    local isVehicleAccessible = GetIsVehicleAccessible(vehicle)
-    if isVehicleAccessible then return end
-
-    if config.getKeysWhenEntering then
-        TriggerServerEvent('qbx_vehiclekeys:server:tookKeys', VehToNet(vehicle))
-        return
-    end
-
-    local isVehicleRunning = GetIsVehicleEngineRunning(vehicle)
-    if config.getKeysWhenEngineIsRunning and isVehicleRunning then
-        lib.print.debug("giving keys because engine is running")
-        TriggerServerEvent('qbx_vehiclekeys:server:playerEnteredVehicleWithEngineOn', VehToNet(vehicle))
-        return
-    end
-
-    lib.print.debug("player does not have access to vehicle ignition. Disabling engine.")
-    SetVehicleNeedsToBeHotwired(vehicle, false)
-    CreateThread(function()
-        while not isVehicleAccessible and cache.seat == -1 do
-            SetVehicleEngineOn(vehicle, false, true, true)
-            DisableControlAction(0, 71, true)
-            Wait(0)
-            isVehicleAccessible = GetIsVehicleAccessible(vehicle)
+        if monitoredVehicle == vehicle then
+            DisableKeySearch()
+            monitoredVehicle = nil
         end
-        if lib.progressActive() then
-            lib.cancelProgress()
-        end
-        DisableKeySearch()
     end)
-
-    if vehicleConfig.findKeysChance ~= 0.0 then
-        EnableKeySearch()
-    end
 end
 
 lib.onCache('seat', function(newSeat)
@@ -120,7 +120,6 @@ togglelocksBind = lib.addKeybind({
 })
 
 local function toggleEngine(vehicle)
-    if not GetIsVehicleAccessible(vehicle) then return end
     local engineOn = GetIsVehicleEngineRunning(vehicle)
 
     local vehicleModel = GetEntityModel(vehicle)
@@ -145,7 +144,7 @@ local function toggleEngine(vehicle)
         Wait(anim.delay or 0)
     end
 
-    if cache.vehicle then
+    if cache.vehicle == vehicle and cache.seat == -1 and (engineOn or canStart(vehicle)) then
         SetVehicleEngineOn(vehicle, not engineOn, false, true)
     end
 end
@@ -177,7 +176,6 @@ RegisterNetEvent('QBCore:Client:VehicleInfo', function(data)
     local driver = GetPedInVehicleSeat(data.vehicle, -1)
 
     if driver ~= 0 and IsEntityDead(driver) and not (vehicleConfig.carjackingImmune or IsPedAPlayer(driver)) then
-        TriggerServerEvent('qb-vehiclekeys:server:setVehLockState', data.netId, 1)
         if lib.progressCircle({
             duration = 2500,
             label = locale('progress.takekeys'),
@@ -227,33 +225,16 @@ AddEventHandler('onResourceStart', function(resourceName)
     end
 end)
 
----Checks the vehicle is always locked at spawn.
----@param vehicle number The entity number of the vehicle.
----@param isDriven boolean
----@return boolean `true` if the vehicle is locked, `false` otherwise.
-local function getIsVehicleInitiallyLocked(vehicle, isDriven)
-    local vehicleConfig = GetVehicleConfig(vehicle)
-    local vehicleLockedChance = isDriven
-        and vehicleConfig.spawnLockedIfDriven
-         or vehicleConfig.spawnLockedIfParked
-
-    if type(vehicleLockedChance) == 'number' then
-        return math.random() < vehicleLockedChance
-    else
-        return vehicleLockedChance == true
-    end
-end
-
+local lastTrafficLockRequest
 local function onVehicleAttemptToEnter(vehicle)
     if Entity(vehicle).state.doorslockstate then return end
-
-    local ped = GetPedInVehicleSeat(vehicle, -1)
-    if IsPedAPlayer(ped) then return end
-
-    local isLocked = not GetVehicleConfig(vehicle).noLock and getIsVehicleInitiallyLocked(vehicle, ped and ped ~= 0)
-    local lockState = isLocked and 2 or 1
-    SetVehicleDoorsLocked(vehicle, lockState)
-    TriggerServerEvent('qb-vehiclekeys:server:setVehLockState', NetworkGetNetworkIdFromEntity(vehicle), lockState)
+    local netId = VehToNet(vehicle)
+    if lastTrafficLockRequest == netId then return end
+    lastTrafficLockRequest = netId
+    TriggerServerEvent('qbx_vehiclekeys:server:initTrafficLock', netId)
+    SetTimeout(1000, function()
+        if lastTrafficLockRequest == netId then lastTrafficLockRequest = nil end
+    end)
 end
 
 local isLoggedIn = false

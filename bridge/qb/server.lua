@@ -44,7 +44,12 @@ end
 CreateQbExport('RemoveKeys', removeKeys)
 
 RegisterNetEvent('qb-vehiclekeys:server:AcquireVehicleKeys', function(plate)
-    giveKeys(source, plate, true)
+    -- Client ownership notifications only acknowledge a key the server already knows about.
+    local src = source
+    if type(plate) ~= 'string' then return end
+    for _, vehicle in ipairs(GetVehiclesFromPlate(plate)) do
+        if IsPlayerNearVehicle(src, vehicle) and HasKeys(src, vehicle) then return true end
+    end
 end)
 
 RegisterNetEvent('qb-vehiclekeys:server:removeKeys', function(plate)

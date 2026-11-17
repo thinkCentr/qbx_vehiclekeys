@@ -306,25 +306,40 @@ lib.callback.register('qbx_vehiclekeys:ignition:finishHotwire', function(source,
     return true
 end)
 
--- ShiftLocal diagnostics: identifies whether a missing Contact is a UI issue or a failed binding.
+-- Admin diagnostic also works OUTSIDE a locked persisted vehicle.
 lib.addCommand('shiftcontactdebug', {
-    help = 'Diagnostic du Contact et du port ECU du véhicule conduit',
+    help = 'Diagnostic du Contact et ECU : au volant ou à côté du véhicule',
     restricted = 'group.admin',
 }, function(source)
     local ped = GetPlayerPed(source)
-    local vehicle = ped ~= 0 and GetVehiclePedIsIn(ped, false) or 0
-    if vehicle == 0 or GetPedInVehicleSeat(vehicle, -1) ~= ped then
-        exports.qbx_core:Notify(source, 'Assieds-toi au volant avant ce diagnostic.', 'error')
+    if ped == 0 then return end
+    local vehicle = GetVehiclePedIsIn(ped, false)
+    if vehicle == 0 then
+        local coords = GetEntityCoords(ped)
+        local distance = 6.0
+        for _, candidate in ipairs(GetAllVehicles()) do
+            if DoesEntityExist(candidate) and GetEntityRoutingBucket(candidate) == GetPlayerRoutingBucket(source) then
+                local candidateDistance = #(GetEntityCoords(candidate) - coords)
+                if candidateDistance < distance then
+                    vehicle, distance = candidate, candidateDistance
+                end
+            end
+        end
+    end
+    if vehicle == 0 then
+        exports.qbx_core:Notify(source, 'Approche-toi du véhicule ou assieds-toi au volant.', 'error')
         return
     end
     local id, kind = GetIgnitionIdentity(vehicle)
     local invId = inventory:GetIgnitionVehicleId(vehicle)
     local invKind = inventory:GetIgnitionVehicleKind(vehicle)
-    local stateId = Entity(vehicle).state.vehicleid
+    local state = Entity(vehicle).state
     local ecuInserted = inventory:HasInsertedEcuProgrammer(vehicle)
-    local message = ('Contact: %s (%s) | Inventaire: %s (%s) | Qbox: %s | ECU: %s')
+    local hasKey = HasPhysicalKey(source, vehicle)
+    local message = ('Contact: %s (%s) | Inventaire: %s (%s) | Qbox: %s | Persisté: %s | Clé: %s | ECU: %s')
         :format(tostring(id), tostring(kind), tostring(invId), tostring(invKind),
-            tostring(stateId), ecuInserted and 'branché' or 'vide')
+            tostring(state.vehicleid), tostring(state.persisted),
+            hasKey and 'oui' or 'non', ecuInserted and 'branché' or 'vide')
     print(('[qbx_vehiclekeys] Diagnostic joueur %d: %s'):format(source, message))
     exports.qbx_core:Notify(source, message, id and 'inform' or 'error', 12000)
 end)

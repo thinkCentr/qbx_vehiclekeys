@@ -19,19 +19,13 @@ end
 local searched, carjacked, lockpicked = {}, {}, {}
 
 local function isTrafficVehicle(vehicle)
-    return not exports.ox_inventory:GetIgnitionVehicleId(vehicle)
-        and not Entity(vehicle).state.vehicleid and not Entity(vehicle).state.persisted
+    local _, kind = GetIgnitionIdentity(vehicle)
+    return kind == 'temporary' or (kind == nil
+        and not Entity(vehicle).state.vehicleid and not Entity(vehicle).state.persisted)
 end
 
-lib.callback.register('qbx_vehiclekeys:server:findKeys', function(source, netId)
-    local vehicle = nearbyVehicle(source, netId)
-    if not vehicle or not isTrafficVehicle(vehicle) or searched[vehicle]
-        or GetPedInVehicleSeat(vehicle, -1) ~= GetPlayerPed(source) then return false end
-    searched[vehicle] = true
-    if math.random() > GetVehicleConfig(vehicle).findKeysChance then return false end
-    GiveKeys(source, vehicle)
-    return GrantTemporaryIgnition(source, vehicle)
-end)
+-- No legacy search-for-keys grant: parked traffic has an empty Contact.
+lib.callback.register('qbx_vehiclekeys:server:findKeys', function() return false end)
 
 local function isPlayerPed(ped)
     for _, playerId in ipairs(GetPlayers()) do
@@ -55,9 +49,10 @@ lib.callback.register('qbx_vehiclekeys:server:carjack', function(source, netId, 
     carjacked[vehicle] = true
     -- The client's weapon group is presentation data. Use the server's default chance.
     if math.random() > (config.carjackChance.default or 0.5) then return false end
+    if not PreserveAmbientIgnition(vehicle) then return false end
     GiveKeys(source, vehicle)
     setLockState(vehicle, 'unlock')
-    return GrantTemporaryIgnition(source, vehicle)
+    return true
 end)
 
 RegisterNetEvent('qbx_vehiclekeys:server:tookKeys', function(netId)
@@ -66,9 +61,9 @@ RegisterNetEvent('qbx_vehiclekeys:server:tookKeys', function(netId)
     local driver = vehicle and trafficDriver(vehicle)
     if not driver or GetEntityHealth(driver) > 0 or carjacked[vehicle] then return end
     carjacked[vehicle] = true
+    if not PreserveAmbientIgnition(vehicle) then return end
     GiveKeys(src, vehicle)
     setLockState(vehicle, 'unlock')
-    GrantTemporaryIgnition(src, vehicle)
 end)
 
 lib.callback.register('qbx_vehiclekeys:server:hasPhysicalKey', function(source, netId)
@@ -85,15 +80,30 @@ lib.callback.register('qbx_vehiclekeys:server:lockpickDoor', function(source, ne
     if lockpicked[vehicle] and lockpicked[vehicle] > now then return false end
     lockpicked[vehicle] = now + 5000
     local inv = exports.ox_inventory
-    local tool = inv:GetItemCount(source, 'advancedlockpick') > 0 and 'advancedlockpick' or 'lockpick'
-    if not inv:RemoveItem(source, tool, 1) or math.random() > 0.75 then return false end
+    local tool
+    for _, name in ipairs({ 'advancedlockpick', 'lockpick' }) do
+        for _, item in pairs(inv:Search(source, 'slots', name) or {}) do
+            if not item.metadata or item.metadata.vehicleId == nil then
+                tool = item
+                break
+            end
+        end
+        if tool then break end
+    end
+    if not tool then return false end
+    if math.random() > 0.75 then
+        inv:RemoveItem(source, tool.name, 1, tool.metadata, tool.slot, false, true)
+        return false
+    end
     setLockState(vehicle, 'unlock')
     return true
 end)
 
 RegisterNetEvent('qbx_vehiclekeys:server:initTrafficLock', function(netId)
     local vehicle = nearbyVehicle(source, netId)
-    if not vehicle or not isTrafficVehicle(vehicle) or Entity(vehicle).state.doorslockstate then return end
+    if not vehicle then return end
+    EnsureAmbientIgnition(vehicle)
+    if not isTrafficVehicle(vehicle) or Entity(vehicle).state.doorslockstate then return end
     local driver = GetPedInVehicleSeat(vehicle, -1)
     if driver ~= 0 and isPlayerPed(driver) then return end
     local config = GetVehicleConfig(vehicle)

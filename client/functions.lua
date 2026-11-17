@@ -223,7 +223,7 @@ function Hotwire(vehicle, _, customChallenge)
 
         local success = lib.callback.await('qbx_vehiclekeys:ignition:finishHotwire', false, VehToNet(vehicle), passed == true)
         if success then
-            exports.qbx_core:Notify('Contact contourné. Le crochet est maintenant lié au véhicule.', 'success')
+            exports.qbx_core:Notify('Contact contourné. Crochet lié au véhicule. Appuie à nouveau pour démarrer.', 'success')
         else
             SendPoliceAlertAttempt('carjack', vehicle)
             exports.qbx_core:Notify('Le contournement du Contact a échoué.', 'error')

@@ -73,13 +73,18 @@ end)
 
 -- Door lockpicking uses Lation Pattern Lock. Its UI result is client-reported,
 -- so the server independently validates location, tool, lock state, and elapsed time.
-local function availablePick(source)
+local function availablePick(source, selectedSlot)
     local inv = exports.ox_inventory
+    if selectedSlot ~= nil then
+        if type(selectedSlot) ~= 'number' or selectedSlot % 1 ~= 0 then return end
+        local item = inv:GetSlot(source, selectedSlot)
+        if item and (item.name == 'advancedlockpick' or item.name == 'lockpick')
+            and (not item.metadata or item.metadata.vehicleId == nil) then return item end
+        return
+    end
     for _, name in ipairs({ 'advancedlockpick', 'lockpick' }) do
         for _, item in pairs(inv:Search(source, 'slots', name) or {}) do
-            if not item.metadata or item.metadata.vehicleId == nil then
-                return item
-            end
+            if not item.metadata or item.metadata.vehicleId == nil then return item end
         end
     end
 end
@@ -93,14 +98,14 @@ local function validDoorAttempt(source, vehicle)
         and #(GetEntityCoords(ped) - GetEntityCoords(vehicle)) <= 4.0
 end
 
-lib.callback.register('qbx_vehiclekeys:server:beginDoorLockpick', function(source, netId)
+lib.callback.register('qbx_vehiclekeys:server:beginDoorLockpick', function(source, netId, selectedSlot)
     local vehicle = nearbyVehicle(source, netId)
     if not validDoorAttempt(source, vehicle) then return false end
     local now = GetGameTimer()
     local prior = doorAttempts[source]
     if prior and (prior.expires or prior.cooldown or 0) > now then return false end
     if lockpicked[vehicle] and lockpicked[vehicle] > now then return false end
-    local tool = availablePick(source)
+    local tool = availablePick(source, selectedSlot)
     local player = exports.qbx_core:GetPlayer(source)
     if not tool or not player then return false end
     doorAttempts[source] = {

@@ -60,8 +60,9 @@ local function onEnteringDriverSeat()
         local authorized = false
         local nextCheck = 0
         local checking = false
-        local config = GetVehicleConfig(vehicle)
-        if config.findKeysChance ~= 0.0 then EnableKeySearch() end
+        -- Register ambient Contact lazily before the first authorization check.
+        pcall(lib.callback.await, 'qbx_vehiclekeys:ignition:ensureAmbient', false, VehToNet(vehicle))
+        DisableKeySearch()
 
         while cache.seat == -1 and cache.vehicle == vehicle do
             if not checking and (refreshIgnition or GetGameTimer() >= nextCheck) then
@@ -144,8 +145,11 @@ local function toggleEngine(vehicle)
         Wait(anim.delay or 0)
     end
 
-    if cache.vehicle == vehicle and cache.seat == -1 and (engineOn or canStart(vehicle)) then
+    if cache.vehicle ~= vehicle or cache.seat ~= -1 then return end
+    if engineOn or canStart(vehicle) then
         SetVehicleEngineOn(vehicle, not engineOn, false, true)
+    else
+        Hotwire(vehicle, false)
     end
 end
 
@@ -195,13 +199,7 @@ end)
 RegisterNetEvent('lockpicks:UseLockpick', function(isAdvanced)
     local vehicle = cache.vehicle
     if vehicle then
-        if GetKeySearchEnabled() then
-            DisableKeySearch()
-            Hotwire(vehicle, isAdvanced)
-            EnableKeySearch()
-        else
-            Hotwire(vehicle, isAdvanced)
-        end
+        exports.qbx_core:Notify('Insère le crochet dans Contact, puis tente de démarrer.', 'inform')
     else
         LockpickDoor(isAdvanced)
     end
@@ -227,11 +225,13 @@ end)
 
 local lastTrafficLockRequest
 local function onVehicleAttemptToEnter(vehicle)
-    if Entity(vehicle).state.doorslockstate then return end
     local netId = VehToNet(vehicle)
     if lastTrafficLockRequest == netId then return end
     lastTrafficLockRequest = netId
-    TriggerServerEvent('qbx_vehiclekeys:server:initTrafficLock', netId)
+    TriggerServerEvent('qbx_vehiclekeys:ignition:observeVehicle', netId)
+    if not Entity(vehicle).state.doorslockstate then
+        TriggerServerEvent('qbx_vehiclekeys:server:initTrafficLock', netId)
+    end
     SetTimeout(1000, function()
         if lastTrafficLockRequest == netId then lastTrafficLockRequest = nil end
     end)
